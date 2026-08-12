@@ -39,6 +39,12 @@ export interface ApplicationServiceDeps {
   appBaseUrl: string;
 }
 
+// Ім'я папки заявки в тестовому Drive — єдине джерело правди: сервіс створює,
+// наскрізний сценарій (scripts/e2e) шукає і прибирає за тим самим форматом.
+export function applicationFolderName(fullName: string, company: string): string {
+  return `${fullName} — ${company}`;
+}
+
 export function createApplicationService(deps: ApplicationServiceDeps): ApplicationService {
   return {
     async createApplication({ company, fullName }) {
@@ -46,7 +52,7 @@ export function createApplicationService(deps: ApplicationServiceDeps): Applicat
         throw new Error("Google Drive не налаштований: задайте GOOGLE_DRIVE_TEST_FOLDER_ID");
       }
       const token = generateToken();
-      const folderName = `${fullName} — ${company}`;
+      const folderName = applicationFolderName(fullName, company);
       const existing = await deps.drive.findFoldersByName(folderName, deps.testFolderId);
       if (existing.length > 0) {
         throw new FolderExistsError();
