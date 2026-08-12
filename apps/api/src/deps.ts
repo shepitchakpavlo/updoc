@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import { createMockAssessmentProvider } from "./assessment/mock.js";
 import { createPgApplicationRepo } from "./applications/repo.js";
 import { createApplicationService, type ApplicationService } from "./applications/service.js";
 import { loadConfig } from "./config.js";
@@ -29,6 +30,9 @@ export function createDefaultDeps(env: NodeJS.ProcessEnv = process.env): AppDeps
     submissions: createSubmissionService({
       applications: applicationRepo,
       submissions: createPgSubmissionRepo(db),
+      // Assessment у TB-0 — мок; Phase 1 підмінить hosted vision-провайдером
+      // без змін ядра (контракт AssessmentProvider, Architecture §5).
+      assessment: createMockAssessmentProvider(),
     }),
   };
 }

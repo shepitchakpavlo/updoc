@@ -62,8 +62,9 @@ export function ApplicationForm({ token, api }: { token: string; api?: UpDocApi 
     setBusySlot(slot);
     try {
       const result = await client.uploadFile(token, slot, file);
-      // Стан слота — одразу з відповіді API; фідбек старого файла скидається.
-      setBySlot((prev) => ({ ...prev, [slot]: { slot, status: result.status, feedback: null } }));
+      // Стан і фідбек — одразу з відповіді API: відхилений файл (тикет 06)
+      // повертає причину assessment, яку показуємо працівнику без перезапиту.
+      setBySlot((prev) => ({ ...prev, [slot]: { slot, status: result.status, feedback: result.feedback } }));
     } catch (err) {
       // Помилка upload (напр. 413 file_too_large) — фідбек слота; стан не змінюється.
       setBySlot((prev) => ({

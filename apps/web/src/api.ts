@@ -32,6 +32,8 @@ export interface UploadResult {
   status: SubmissionStatus;
   mimeType: string;
   pageCount: number | null;
+  /** причина відхилення (feedback для працівника); null, коли прийнято (тикет 06) */
+  feedback: string | null;
 }
 
 // Помилка API з тіла відповіді: { error, message } (спільний контракт тикетів 03–05).

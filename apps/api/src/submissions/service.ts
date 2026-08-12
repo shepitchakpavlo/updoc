@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { AssessmentProvider } from "../assessment/provider.js";
 import { BOOKLET_SLOTS, type BookletSlot } from "../checklist.js";
 import type { ApplicationRepo } from "../applications/repo.js";
 import type { SubmissionStatus } from "../db/schema.js";
@@ -7,10 +8,12 @@ import { preflight, type SupportedMime } from "../preflight/index.js";
 import { hashToken } from "../tokens.js";
 import type { SubmissionListItem, SubmissionRepo } from "./repo.js";
 
-// Upload файла на слот за токеном заявки (тикет 04): токен → заявка,
+// Upload файла на слот за токеном заявки (тикети 04, 06): токен → заявка,
 // слот із чекліста, preflight (розмір/MIME/сторінки PDF), sha256, submission
-// зі станом pending. Файл тримається в пам'яті процесу — TemporaryStorage
-// лише контракт (Phase 1 реалізує зберігання).
+// у стані «перевіряється» → assessment (контракт AssessmentProvider) →
+// «прийнято» / «потрібно перезавантажити» з результатом в assessment JSON.
+// Файл тримається в пам'яті процесу — TemporaryStorage лише контракт
+// (Phase 1 реалізує зберігання).
 
 export class UnknownTokenError extends ApiError {
   constructor() {
@@ -37,6 +40,8 @@ export interface UploadResult {
   status: SubmissionStatus;
   mimeType: SupportedMime;
   pageCount: number | null;
+  /** причина відхилення (feedback для працівника); null, коли прийнято */
+  feedback: string | null;
 }
 
 // Стан слота для SPA-форми (тикет 05): feedback — зрозуміла причина для
@@ -57,6 +62,8 @@ export interface SubmissionService {
 export interface SubmissionServiceDeps {
   applications: ApplicationRepo;
   submissions: SubmissionRepo;
+  /** Контракт Architecture §5; у TB-0 — мок, Phase 1 підставить hosted vision. */
+  assessment: AssessmentProvider;
 }
 
 export function createSubmissionService(deps: SubmissionServiceDeps): SubmissionService {
@@ -70,19 +77,38 @@ export function createSubmissionService(deps: SubmissionServiceDeps): Submission
         throw new UnknownTokenError();
       }
       const result = await preflight(file);
-      // Upload завжди повертає файл у стан «очікується»: assessment ще не виконано
-      // (тикет 06 переведе у «перевіряється»); заміна файла скидає старий результат.
-      const status: SubmissionStatus = "pending";
       const checksum = createHash("sha256").update(file).digest("hex");
+      // Файл прийнято в обробку: стан «перевіряється», старий assessment і
+      // ledger скинуті (заміна файла — нове рішення). При збої провайдера
+      // файл лишається у «перевіряється» — технічна помилка, не reject
+      // (Architecture §6: один retry у Phase 1).
+      await deps.submissions.upsert({
+        applicationId: application.id,
+        slot,
+        checksum,
+        status: "checking",
+        assessment: null,
+        driveFileId: null,
+      });
+      const assessment = await deps.assessment.assess(file);
+      // Результат у форматі реального виклику зберігається в assessment JSON;
+      // стан — «прийнято» або «потрібно перезавантажити» (Architecture §4).
+      const status: SubmissionStatus = assessment.accepted ? "accepted" : "needs_reupload";
       await deps.submissions.upsert({
         applicationId: application.id,
         slot,
         checksum,
         status,
-        assessment: null,
+        assessment,
         driveFileId: null,
       });
-      return { slot: slot as BookletSlot, checksum, status, ...result };
+      return {
+        slot: slot as BookletSlot,
+        checksum,
+        status,
+        feedback: assessment.accepted ? null : assessment.reason,
+        ...result,
+      };
     },
     async listByToken(token) {
       const application = await deps.applications.findByTokenHash(hashToken(token));

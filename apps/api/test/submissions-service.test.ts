@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createMockAssessmentProvider } from "../src/assessment/mock.js";
+import type { AssessmentProvider, AssessmentResult } from "../src/assessment/provider.js";
 import type { Application, ApplicationRepo } from "../src/applications/repo.js";
 import {
   FileTooLargeError,
@@ -14,9 +16,26 @@ import {
 } from "../src/submissions/service.js";
 import { makePdf } from "./helpers/pdf.js";
 
-// Seam: service + fake repos (тикет 04). Контракт:
-// upload за токеном валідує слот, проганяє preflight, рахує sha256 і створює
-// submission зі станом pending; повторне завантаження — заміна (upsert).
+// Seam: service + fake repos + fake AssessmentProvider (тикет 04, 06). Контракт:
+// upload за токеном валідує слот, проганяє preflight, рахує sha256, фіксує
+// стан «перевіряється» і виконує assessment; результат (accepted/rejected +
+// причина) зберігається в assessment JSON submission, стан → «прийнято» або
+// «потрібно перезавантажити». Повторне завантаження — заміна (upsert).
+
+// Результати фейк-провайдера — незалежні літерали, не переобчислені кодом.
+const ACCEPTED_ASSESSMENT: AssessmentResult = {
+  accepted: true,
+  reason: null,
+  recognizedFields: { fullName: { value: "Тестовий Працівник", confidence: 0.97 } },
+  confidence: 0.96,
+};
+
+const REJECTED_ASSESSMENT: AssessmentResult = {
+  accepted: false,
+  reason: "Файл замалий для розпізнавання — перезавантажте документ, будь ласка",
+  recognizedFields: {},
+  confidence: 0,
+};
 
 const APP_ID = "app-1";
 const MAX_20MB = 20 * 1024 * 1024;
@@ -66,9 +85,15 @@ function fakeSubmissionRepo(): FakeSubmissionRepo {
   };
 }
 
+function fakeAssessment(result: AssessmentResult): AssessmentProvider {
+  return { async assess() { return result; } };
+}
+
 function makeService(overrides: {
   applications?: ApplicationRepo;
   submissions?: FakeSubmissionRepo;
+  /** дефолт — фейк із прийнятим результатом; мок підставляється окремим тестом */
+  assessment?: AssessmentProvider;
 } = {}): SubmissionService & { submissions: FakeSubmissionRepo } {
   const submissions = overrides.submissions ?? fakeSubmissionRepo();
   const applications: ApplicationRepo =
@@ -78,29 +103,85 @@ function makeService(overrides: {
         return makeAppRow();
       },
     };
-  const service = createSubmissionService({ applications, submissions });
+  const service = createSubmissionService({
+    applications,
+    submissions,
+    assessment: overrides.assessment ?? fakeAssessment(ACCEPTED_ASSESSMENT),
+  });
   return Object.assign(service, { submissions });
 }
 
-test("upload створює submission: слот, checksum (sha256), стан pending", async () => {
+test("upload: стан «перевіряється» → «прийнято», assessment зберігається в submission", async () => {
   const service = makeService();
   const result = await service.uploadSlot({ token: "raw-token", slot: "1-2", file: PNG_HELLO });
   assert.deepEqual(result, {
     slot: "1-2",
     checksum: PNG_HELLO_SHA256,
-    status: "pending",
+    status: "accepted",
     mimeType: "image/png",
     pageCount: null,
+    feedback: null,
   });
-  assert.equal(service.submissions.upserts.length, 1);
-  const stored = service.submissions.upserts[0];
-  assert.ok(stored);
-  assert.deepEqual(
-    { applicationId: stored.applicationId, slot: stored.slot, checksum: stored.checksum, status: stored.status },
-    { applicationId: APP_ID, slot: "1-2", checksum: PNG_HELLO_SHA256, status: "pending" },
+  assert.equal(service.submissions.upserts.length, 2, "спершу «перевіряється», потім фінальний стан");
+  const [checking, final] = service.submissions.upserts;
+  assert.ok(checking && final);
+  for (const stored of [checking, final]) {
+    assert.deepEqual(
+      { applicationId: stored.applicationId, slot: stored.slot, checksum: stored.checksum },
+      { applicationId: APP_ID, slot: "1-2", checksum: PNG_HELLO_SHA256 },
+    );
+  }
+  assert.equal(checking.status, "checking", "файл спершу фіксується у стані «перевіряється»");
+  assert.equal(checking.assessment, null, "під час перевірки старого assessment немає");
+  assert.equal(checking.driveFileId, null, "новий файл — без старого ledger");
+  assert.equal(final.status, "accepted", "після assessment — «прийнято»");
+  assert.deepEqual(final.assessment, ACCEPTED_ASSESSMENT, "результат у форматі реального виклику");
+  assert.equal(final.driveFileId, null);
+});
+
+test("відхилений файл: стан «потрібно перезавантажити», причина — feedback у відповіді", async () => {
+  const service = makeService({ assessment: fakeAssessment(REJECTED_ASSESSMENT) });
+  const result = await service.uploadSlot({ token: "raw-token", slot: "11-12", file: PNG_HELLO });
+  assert.equal(result.status, "needs_reupload");
+  assert.equal(result.feedback, REJECTED_ASSESSMENT.reason);
+  const final = service.submissions.upserts[1];
+  assert.ok(final);
+  assert.equal(final.status, "needs_reupload");
+  assert.deepEqual(final.assessment, REJECTED_ASSESSMENT);
+});
+
+test("збій провайдера: технічна помилка, файл лишається у стані «перевіряється»", async () => {
+  const service = makeService({
+    assessment: {
+      async assess() {
+        throw new Error("hosted vision недоступний");
+      },
+    },
+  });
+  await assert.rejects(
+    service.uploadSlot({ token: "raw-token", slot: "1-2", file: PNG_HELLO }),
+    /hosted vision недоступний/,
   );
-  assert.equal(stored.assessment, null, "новий файл — без старого assessment");
-  assert.equal(stored.driveFileId, null, "новий файл — без старого ledger");
+  assert.equal(service.submissions.upserts.length, 1);
+  assert.equal(service.submissions.upserts[0]?.status, "checking", "збій ≠ reject: стан чекає retry (Architecture §6)");
+});
+
+test("реальний мок через сервіс: великий файл → «прийнято», малий → «потрібно перезавантажити»", async () => {
+  const service = makeService({ assessment: createMockAssessmentProvider() });
+  const largePng = Buffer.concat([PNG_SIG, Buffer.alloc(4096, 0x01)]);
+  const accepted = await service.uploadSlot({ token: "raw-token", slot: "1-2", file: largePng });
+  assert.equal(accepted.status, "accepted");
+  const rejected = await service.uploadSlot({ token: "raw-token", slot: "11-12", file: PNG_HELLO });
+  assert.equal(rejected.status, "needs_reupload");
+  assert.ok(rejected.feedback && rejected.feedback.length > 0);
+  const rejectedFinal = service.submissions.upserts[3];
+  assert.ok(rejectedFinal);
+  assert.deepEqual(rejectedFinal.assessment, {
+    accepted: false,
+    reason: rejected.feedback,
+    recognizedFields: {},
+    confidence: 0,
+  });
 });
 
 test("невідомий токен — UnknownTokenError, submission не створюється", async () => {
@@ -162,12 +243,14 @@ test("повторне завантаження на слот замінює п�
   const second = Buffer.concat([PNG_SIG, Buffer.from("two")]);
   await service.uploadSlot({ token: "raw-token", slot: "1-2", file: first });
   await service.uploadSlot({ token: "raw-token", slot: "1-2", file: second });
-  assert.equal(service.submissions.upserts.length, 2);
-  const [storedFirst, storedSecond] = service.submissions.upserts;
-  assert.ok(storedFirst && storedSecond);
-  assert.match(storedFirst.checksum, /^[0-9a-f]{64}$/);
-  assert.notEqual(storedFirst.checksum, storedSecond.checksum);
-  assert.equal(storedSecond.status, "pending", "після заміни файл знову очікує assessment");
+  assert.equal(service.submissions.upserts.length, 4, "по два записи на upload: перевіряється + фінал");
+  const firstFinal = service.submissions.upserts[1];
+  const secondFinal = service.submissions.upserts[3];
+  assert.ok(firstFinal && secondFinal);
+  assert.match(firstFinal.checksum, /^[0-9a-f]{64}$/);
+  assert.notEqual(firstFinal.checksum, secondFinal.checksum);
+  assert.equal(secondFinal.status, "accepted", "новий файл проходить assessment наново");
+  assert.deepEqual(secondFinal.assessment, ACCEPTED_ASSESSMENT, "старий assessment замінено новим");
 });
 
 // Контракт тикета 05 для SPA: стан і фідбек слотів за токеном, у порядку

@@ -70,6 +70,7 @@ function fakeSubmissions(): FakeSubmissions {
         status: "pending",
         mimeType: "image/png",
         pageCount: null,
+        feedback: null,
       };
     },
     async listByToken() {
@@ -121,6 +122,7 @@ test("POST /applications/upload створює submission (201): слот, check
     status: "pending",
     mimeType: "image/png",
     pageCount: null,
+    feedback: null,
   });
   assert.deepEqual(service.calls, [{ token: TOKEN, slot: "1-2", file: PNG }]);
   await app.close();

@@ -10,6 +10,7 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import type { AssessmentResult } from "../assessment/provider.js";
 
 // Стани submission (Architecture §4):
 // очікується → перевіряється → прийнято | потрібно перезавантажити.
@@ -20,20 +21,6 @@ export const submissionStatus = pgEnum("submission_status", [
   "needs_reupload", // потрібно перезавантажити
 ]);
 export type SubmissionStatus = (typeof submissionStatus.enumValues)[number];
-
-// Формат assessment JSON — за контрактом AssessmentProvider (Architecture §5):
-// accepted/rejected, причина, recognized fields, confidence.
-export interface RecognizedField {
-  value: string;
-  confidence: number;
-}
-
-export interface AssessmentResult {
-  accepted: boolean;
-  reason: string | null;
-  recognizedFields: Record<string, RecognizedField>;
-  confidence: number;
-}
 
 export const applications = pgTable(
   "applications",

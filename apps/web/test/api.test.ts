@@ -75,6 +75,7 @@ describe("createApi.uploadFile", () => {
         status: "pending",
         mimeType: "image/png",
         pageCount: null,
+        feedback: null,
       });
     });
     const api = createApi(fetchImpl as typeof fetch);
@@ -93,6 +94,7 @@ describe("createApi.uploadFile", () => {
       status: "pending",
       mimeType: "image/png",
       pageCount: null,
+      feedback: null,
     });
   });
 

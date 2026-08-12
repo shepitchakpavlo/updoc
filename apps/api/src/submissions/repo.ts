@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type { AssessmentResult, SubmissionStatus } from "../db/schema.js";
+import type { AssessmentResult } from "../assessment/provider.js";
+import type { SubmissionStatus } from "../db/schema.js";
 import { submissions } from "../db/schema.js";
 
 export type NewSubmission = typeof submissions.$inferInsert;

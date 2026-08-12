@@ -25,6 +25,7 @@ function fakeApi(overrides: Partial<UpDocApi> = {}): UpDocApi {
       status: "pending",
       mimeType: "image/png",
       pageCount: null,
+      feedback: null,
     })),
     ...overrides,
   };
@@ -93,6 +94,7 @@ describe("ApplicationForm", () => {
       status: "accepted",
       mimeType: "image/png",
       pageCount: null,
+      feedback: null,
     }));
     const api = fakeApi({ uploadFile });
     render(<ApplicationForm token="abc123" api={api} />);
@@ -103,6 +105,27 @@ describe("ApplicationForm", () => {
     expect(await screen.findByText("Прийнято")).toBeTruthy();
     expect(screen.getAllByText("Очікується")).toHaveLength(3); // інші слоти не змінилися
     expect(uploadFile).toHaveBeenCalledWith("abc123", "1-2", expect.any(File));
+  });
+
+  it("відхилений assessment показує причину одразу після завантаження", async () => {
+    const api = fakeApi({
+      uploadFile: vi.fn(async (): Promise<UploadResult> => ({
+        slot: "1-2",
+        checksum: "ef".repeat(32),
+        status: "needs_reupload",
+        mimeType: "image/png",
+        pageCount: null,
+        feedback: "Файл замалий для розпізнавання — перезавантажте документ, будь ласка",
+      })),
+    });
+    render(<ApplicationForm token="abc123" api={api} />);
+    await screen.findAllByText("Очікується");
+
+    fireEvent.change(firstFileInput(), { target: { files: [new File(["малий"], "scan.png")] } });
+
+    expect(await screen.findByText("Потрібно перезавантажити")).toBeTruthy();
+    expect(screen.getByText("Файл замалий для розпізнавання — перезавантажте документ, будь ласка")).toBeTruthy();
+    expect(screen.getAllByText("Очікується")).toHaveLength(3);
   });
 
   it("помилка API при завантаженні показується як фідбек, стан не змінюється", async () => {
