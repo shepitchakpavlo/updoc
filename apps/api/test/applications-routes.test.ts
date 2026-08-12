@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { BookletSlot } from "../src/checklist.js";
 import { buildApp } from "../src/app.js";
 import { FolderExistsError, type ApplicationService } from "../src/applications/service.js";
+import type { SubmissionService } from "../src/submissions/service.js";
 
 // Публічний контракт тикета 03 на рівні HTTP (seam: routes + fake service):
 // POST /applications створює заявку і повертає лінк; GET за токеном віддає
@@ -10,6 +11,15 @@ import { FolderExistsError, type ApplicationService } from "../src/applications/
 
 // Незалежне значення зі спеки TB-0 (книжечка: слоти 1–2, 11–12, 13–14, 15–16).
 const CHECKLIST: BookletSlot[] = ["1-2", "11-12", "13-14", "15-16"];
+
+// Upload — контракт тикета 04 (test/upload-routes.test.ts); тут лише заглушка.
+function stubSubmissions(): SubmissionService {
+  return {
+    async uploadSlot() {
+      throw new Error("uploadSlot не очікувався в тестах тикета 03");
+    },
+  };
+}
 
 function fakeService(): ApplicationService & { created: Array<{ company: string; fullName: string }> } {
   const created: Array<{ company: string; fullName: string }> = [];
@@ -30,7 +40,7 @@ function fakeService(): ApplicationService & { created: Array<{ company: string;
 
 test("POST /applications створює заявку і повертає лінк", async () => {
   const service = fakeService();
-  const app = buildApp({}, { applications: service });
+  const app = buildApp({}, { applications: service, submissions: stubSubmissions() });
   const res = await app.inject({
     method: "POST",
     url: "/applications",
@@ -44,7 +54,7 @@ test("POST /applications створює заявку і повертає лін�
 
 test("POST /applications із невалідним тілом відхиляється (400)", async () => {
   const service = fakeService();
-  const app = buildApp({}, { applications: service });
+  const app = buildApp({}, { applications: service, submissions: stubSubmissions() });
   for (const payload of [
     {},
     { company: "ТОВ Приклад" },
@@ -68,6 +78,7 @@ test("POST /applications при існуючій папці — hard error 409 �
         return null;
       },
     },
+    submissions: stubSubmissions(),
   });
   const res = await app.inject({
     method: "POST",
@@ -80,7 +91,7 @@ test("POST /applications при існуючій папці — hard error 409 �
 });
 
 test("GET /applications/access за токеном віддає компанію, ПІБ і чекліст", async () => {
-  const app = buildApp({}, { applications: fakeService() });
+  const app = buildApp({}, { applications: fakeService(), submissions: stubSubmissions() });
   const res = await app.inject({
     method: "GET",
     url: "/applications/access",
@@ -96,7 +107,7 @@ test("GET /applications/access за токеном віддає компанію
 });
 
 test("GET /applications/access з невідомим токеном — 404", async () => {
-  const app = buildApp({}, { applications: fakeService() });
+  const app = buildApp({}, { applications: fakeService(), submissions: stubSubmissions() });
   for (const headers of [{ "x-access-token": "unknown-token" }, {}]) {
     const res = await app.inject({ method: "GET", url: "/applications/access", headers });
     assert.equal(res.statusCode, 404, JSON.stringify(headers));

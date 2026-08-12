@@ -4,23 +4,31 @@ import { createPgApplicationRepo } from "./applications/repo.js";
 import { createApplicationService, type ApplicationService } from "./applications/service.js";
 import { loadConfig } from "./config.js";
 import { createDriveClient } from "./drive/client.js";
+import { createPgSubmissionRepo } from "./submissions/repo.js";
+import { createSubmissionService, type SubmissionService } from "./submissions/service.js";
 
 export interface AppDeps {
   applications: ApplicationService;
+  submissions: SubmissionService;
 }
 
 // Дефолтні залежності з оточення. Pool підключається ліниво — /healthz працює без Postgres.
 export function createDefaultDeps(env: NodeJS.ProcessEnv = process.env): AppDeps {
   const config = loadConfig(env);
   const pool = new Pool({ connectionString: config.databaseUrl });
-  const repo = createPgApplicationRepo(drizzle(pool));
+  const db = drizzle(pool);
+  const applicationRepo = createPgApplicationRepo(db);
   const drive = createDriveClient({ credentialsFile: config.driveCredentialsFile });
   return {
     applications: createApplicationService({
-      repo,
+      repo: applicationRepo,
       drive,
       testFolderId: config.driveTestFolderId,
       appBaseUrl: config.appBaseUrl,
+    }),
+    submissions: createSubmissionService({
+      applications: applicationRepo,
+      submissions: createPgSubmissionRepo(db),
     }),
   };
 }
