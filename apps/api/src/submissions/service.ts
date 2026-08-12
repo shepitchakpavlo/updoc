@@ -4,14 +4,15 @@ import { BOOKLET_SLOTS, type BookletSlot } from "../checklist.js";
 import type { ApplicationRepo } from "../applications/repo.js";
 import type { SubmissionStatus } from "../db/schema.js";
 import { ApiError } from "../errors.js";
+import { decidePolicy } from "../policy/index.js";
 import { preflight, type SupportedMime } from "../preflight/index.js";
 import { hashToken } from "../tokens.js";
 import type { SubmissionListItem, SubmissionRepo } from "./repo.js";
 
-// Upload файла на слот за токеном заявки (тикети 04, 06): токен → заявка,
+// Upload файла на слот за токеном заявки (тикети 04, 06, 07): токен → заявка,
 // слот із чекліста, preflight (розмір/MIME/сторінки PDF), sha256, submission
 // у стані «перевіряється» → assessment (контракт AssessmentProvider) →
-// «прийнято» / «потрібно перезавантажити» з результатом в assessment JSON.
+// рішення policy (тикет 07) → «прийнято» / «потрібно перезавантажити».
 // Файл тримається в пам'яті процесу — TemporaryStorage лише контракт
 // (Phase 1 реалізує зберігання).
 
@@ -91,9 +92,12 @@ export function createSubmissionService(deps: SubmissionServiceDeps): Submission
         driveFileId: null,
       });
       const assessment = await deps.assessment.assess(file);
-      // Результат у форматі реального виклику зберігається в assessment JSON;
-      // стан — «прийнято» або «потрібно перезавантажити» (Architecture §4).
-      const status: SubmissionStatus = assessment.accepted ? "accepted" : "needs_reupload";
+      // Рішення приймає policy (тикет 07) над нормалізованим результатом —
+      // не сам провайдер: відповідність слота, загальна впевненість і критичні
+      // поля (Architecture §6). Причина policy — feedback для працівника;
+      // результат зберігається в assessment JSON у форматі реального виклику.
+      const decision = decidePolicy(slot as BookletSlot, assessment);
+      const status: SubmissionStatus = decision.accepted ? "accepted" : "needs_reupload";
       await deps.submissions.upsert({
         applicationId: application.id,
         slot,
@@ -106,7 +110,7 @@ export function createSubmissionService(deps: SubmissionServiceDeps): Submission
         slot: slot as BookletSlot,
         checksum,
         status,
-        feedback: assessment.accepted ? null : assessment.reason,
+        feedback: decision.reason,
         ...result,
       };
     },
@@ -129,8 +133,13 @@ export function createSubmissionService(deps: SubmissionServiceDeps): Submission
           slot,
           status: row.status,
           // Причину показуємо лише тоді, коли файл відхилено: прийнятий/той, що
-          // перевіряється, не потребує дії працівника.
-          feedback: row.status === "needs_reupload" ? (row.assessment?.reason ?? null) : null,
+          // перевіряється, не потребує дії працівника. Рішення policy
+          // детерміноване над збереженим нормалізованим результатом (тикет 07):
+          // фідбек переобчислюємо, щоб policy лишалася єдиним власником рішень.
+          feedback:
+            row.status === "needs_reupload"
+              ? (row.assessment ? decidePolicy(row.slot as BookletSlot, row.assessment).reason : null)
+              : null,
         });
       }
       return views;
