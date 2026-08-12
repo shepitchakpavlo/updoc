@@ -13,9 +13,13 @@ import { createDriveClient, type DriveClient, type FetchLike } from "../src/driv
 const TOKEN_URI = "https://oauth2.googleapis.com/token";
 const CLIENT_EMAIL = "test@updoc.iam.gserviceaccount.com";
 const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
+const DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
 type FilesCall = { method: string; url: string; headers: Record<string, string>; body: unknown };
+
+// Виклик media upload (тикет 08): тіло — сирі байти multipart, не JSON.
+type UploadCall = { method: string; url: string; headers: Record<string, string>; body: Buffer };
 
 function makeKeyPair(): KeyPairKeyObjectResult {
   return generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -43,7 +47,7 @@ function makeCredentialsFile(keyPair: KeyPairKeyObjectResult): string {
 // і віддає access token; далі — Drive API.
 function fakeFetch(
   keyPair: KeyPairKeyObjectResult,
-  records: { tokenCalls: number; filesCalls: FilesCall[] },
+  records: { tokenCalls: number; filesCalls: FilesCall[]; uploadCalls: UploadCall[] },
 ): FetchLike {
   return async (url, init) => {
     const urlStr = typeof url === "string" ? url : url.href;
@@ -71,6 +75,18 @@ function fakeFetch(
         headers: { "content-type": "application/json" },
       });
     }
+    if (urlStr.startsWith(DRIVE_UPLOAD_URL)) {
+      records.uploadCalls.push({
+        method,
+        url: urlStr,
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+        body: Buffer.from(init?.body as ArrayBuffer),
+      });
+      return new Response(JSON.stringify({ id: "file-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (urlStr.startsWith(DRIVE_FILES_URL)) {
       records.filesCalls.push({
         method,
@@ -89,9 +105,9 @@ function fakeFetch(
   };
 }
 
-function makeClient(): { client: DriveClient; records: { tokenCalls: number; filesCalls: FilesCall[] } } {
+function makeClient(): { client: DriveClient; records: { tokenCalls: number; filesCalls: FilesCall[]; uploadCalls: UploadCall[] } } {
   const keyPair = makeKeyPair();
-  const records = { tokenCalls: 0, filesCalls: [] as FilesCall[] };
+  const records = { tokenCalls: 0, filesCalls: [] as FilesCall[], uploadCalls: [] as UploadCall[] };
   const client = createDriveClient({
     credentialsFile: makeCredentialsFile(keyPair),
     fetchImpl: fakeFetch(keyPair, records),
@@ -181,4 +197,97 @@ test("без файлу ключів клієнт дає зрозумілу по
     now: () => 1_000_000,
   });
   await assert.rejects(client.createFolder("X", "p"), /GOOGLE_APPLICATION_CREDENTIALS/);
+});
+
+// Файлові операції (тикет 08): createFile (media upload), listFilesInFolder
+// (з MD5 для ідемпотентного запису), deleteFile.
+
+// Розбір multipart-тіла media upload: перша частина — JSON-метадані,
+// друга — сирі байти файла.
+function parseMultipart(body: Buffer, boundary: string): { metadata: string; data: Buffer } {
+  const text = body.toString("latin1");
+  const first = text.indexOf(`--${boundary}\r\n`);
+  const second = text.indexOf(`--${boundary}\r\n`, first + 1);
+  assert.ok(first >= 0 && second > first, "multipart містить дві частини");
+  const metaStart = text.indexOf("\r\n\r\n", first) + 4;
+  const metaEnd = text.indexOf(`\r\n--${boundary}\r\n`, metaStart);
+  const mediaStart = text.indexOf("\r\n\r\n", second) + 4;
+  const mediaEnd = text.indexOf(`\r\n--${boundary}--`, mediaStart);
+  assert.ok(metaStart > 0 && metaEnd > metaStart && mediaStart > 0 && mediaEnd > mediaStart, "межі частин знайдено");
+  return { metadata: text.slice(metaStart, metaEnd), data: body.subarray(mediaStart, mediaEnd) };
+}
+
+test("createFile завантажує файл у папку media upload-ом (multipart)", async () => {
+  const { client, records } = makeClient();
+  const data = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01, 0x02, 0x03]);
+  const id = await client.createFile({ name: "1-2.png", parentId: "folder-1", mimeType: "image/png", data });
+  assert.equal(id, "file-1");
+  assert.equal(records.uploadCalls.length, 1);
+  const call = records.uploadCalls[0];
+  assert.ok(call);
+  assert.equal(call.method, "POST");
+  assert.equal(call.url, `${DRIVE_UPLOAD_URL}?uploadType=multipart&fields=id`);
+  assert.equal(call.headers.authorization, "Bearer access-1");
+  const ct = call.headers["content-type"] ?? "";
+  assert.match(ct, /^multipart\/related; boundary=updoc-[0-9a-f]{32}$/);
+  const boundary = ct.split("boundary=")[1];
+  assert.ok(boundary);
+  const { metadata, data: media } = parseMultipart(call.body, boundary);
+  assert.deepEqual(JSON.parse(metadata), {
+    name: "1-2.png",
+    mimeType: "image/png",
+    parents: ["folder-1"],
+  });
+  assert.ok(media.equals(data), "байти файла передаються без змін");
+});
+
+test("listFilesInFolder повертає id, ім'я і MD5 файлів папки", async () => {
+  const keyPair = makeKeyPair();
+  const records = { tokenCalls: 0, filesCalls: [] as FilesCall[], uploadCalls: [] as UploadCall[] };
+  const fetchImpl: FetchLike = async (url, init) => {
+    const urlStr = typeof url === "string" ? url : url.href;
+    if (urlStr === TOKEN_URI) {
+      return new Response(JSON.stringify({ access_token: "access-1", expires_in: 3600 }), { status: 200 });
+    }
+    records.filesCalls.push({
+      method: init?.method ?? "GET",
+      url: urlStr,
+      headers: {},
+      body: null,
+    });
+    return new Response(
+      JSON.stringify({
+        files: [
+          { id: "file-a", name: "1-2.png", md5Checksum: "abc123" },
+          { id: "file-b", name: "1-2.pdf", md5Checksum: null },
+        ],
+      }),
+      { status: 200 },
+    );
+  };
+  const client = createDriveClient({
+    credentialsFile: makeCredentialsFile(keyPair),
+    fetchImpl,
+    now: () => 1_000_000,
+  });
+  assert.deepEqual(await client.listFilesInFolder("folder-1"), [
+    { id: "file-a", name: "1-2.png", md5Checksum: "abc123" },
+    { id: "file-b", name: "1-2.pdf", md5Checksum: null },
+  ]);
+  const call = records.filesCalls[0];
+  assert.ok(call);
+  const url = new URL(call.url);
+  assert.equal(url.pathname, "/drive/v3/files");
+  assert.equal(url.searchParams.get("q"), "'folder-1' in parents and trashed=false");
+  assert.equal(url.searchParams.get("fields"), "files(id,name,md5Checksum)");
+});
+
+test("deleteFile видаляє файл за id", async () => {
+  const { client, records } = makeClient();
+  await client.deleteFile("file-1");
+  assert.equal(records.filesCalls.length, 1);
+  const call = records.filesCalls[0];
+  assert.ok(call);
+  assert.equal(call.method, "DELETE");
+  assert.equal(call.url, `${DRIVE_FILES_URL}/file-1`);
 });

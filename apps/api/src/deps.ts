@@ -5,6 +5,7 @@ import { createPgApplicationRepo } from "./applications/repo.js";
 import { createApplicationService, type ApplicationService } from "./applications/service.js";
 import { loadConfig } from "./config.js";
 import { createDriveClient } from "./drive/client.js";
+import { createDriveFinalDestination } from "./drive/final-destination.js";
 import { createPgSubmissionRepo } from "./submissions/repo.js";
 import { createSubmissionService, type SubmissionService } from "./submissions/service.js";
 
@@ -33,6 +34,8 @@ export function createDefaultDeps(env: NodeJS.ProcessEnv = process.env): AppDeps
       // Assessment у TB-0 — мок; Phase 1 підмінить hosted vision-провайдером
       // без змін ядра (контракт AssessmentProvider, Architecture §5).
       assessment: createMockAssessmentProvider(),
+      // Ідемпотентний запис прийнятих файлів у папки заявок (тикет 08).
+      finalDestination: createDriveFinalDestination({ drive }),
     }),
   };
 }

@@ -3,6 +3,7 @@ import type { AssessmentProvider } from "../assessment/provider.js";
 import { BOOKLET_SLOTS, type BookletSlot } from "../checklist.js";
 import type { ApplicationRepo } from "../applications/repo.js";
 import type { SubmissionStatus } from "../db/schema.js";
+import type { FinalDestination } from "../drive/final-destination.js";
 import { ApiError } from "../errors.js";
 import { decidePolicy } from "../policy/index.js";
 import { preflight, type SupportedMime } from "../preflight/index.js";
@@ -65,6 +66,8 @@ export interface SubmissionServiceDeps {
   submissions: SubmissionRepo;
   /** Контракт Architecture §5; у TB-0 — мок, Phase 1 підставить hosted vision. */
   assessment: AssessmentProvider;
+  /** Контракт Architecture §5: ідемпотентний запис прийнятого файла в папку заявки (тикет 08). */
+  finalDestination: FinalDestination;
 }
 
 export function createSubmissionService(deps: SubmissionServiceDeps): SubmissionService {
@@ -97,14 +100,31 @@ export function createSubmissionService(deps: SubmissionServiceDeps): Submission
       // поля (Architecture §6). Причина policy — feedback для працівника;
       // результат зберігається в assessment JSON у форматі реального виклику.
       const decision = decidePolicy(slot as BookletSlot, assessment);
-      const status: SubmissionStatus = decision.accepted ? "accepted" : "needs_reupload";
+      // Тикет 08: у Drive записується лише прийнятий файл (Architecture §4),
+      // id — ledger submission.drive_file_id. Запис ідемпотентний (Architecture
+      // §5): retry після технічного збою (ledger не зберігся) не створює
+      // дублікатів. Збій запису — технічна помилка, не reject: файл лишається
+      // у «перевіряється» для безпечного retry (Architecture §6).
+      let status: SubmissionStatus;
+      let driveFileId: string | null = null;
+      if (decision.accepted) {
+        driveFileId = await deps.finalDestination.writeFile({
+          folderId: application.folderId,
+          slot: slot as BookletSlot,
+          mimeType: result.mimeType,
+          data: file,
+        });
+        status = "accepted";
+      } else {
+        status = "needs_reupload";
+      }
       await deps.submissions.upsert({
         applicationId: application.id,
         slot,
         checksum,
         status,
         assessment,
-        driveFileId: null,
+        driveFileId,
       });
       return {
         slot: slot as BookletSlot,

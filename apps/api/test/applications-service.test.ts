@@ -63,6 +63,14 @@ function fakeDrive(): FakeDrive {
       return "folder-1";
     },
     async deleteFolder() {},
+    // Файлові операції (тикет 08) сервіс заявок не використовує — заглушки.
+    async listFilesInFolder() {
+      return [];
+    },
+    async createFile() {
+      return "file-1";
+    },
+    async deleteFile() {},
   };
 }
 
@@ -109,6 +117,13 @@ test("існуюча папка для іншої заявки — hard error, �
       throw new Error("createFolder не мав викликатись");
     },
     async deleteFolder() {},
+    async listFilesInFolder() {
+      return [];
+    },
+    async createFile() {
+      throw new Error("createFile не мав викликатись");
+    },
+    async deleteFile() {},
   };
   const service = makeService({ drive });
   await assert.rejects(
@@ -129,6 +144,13 @@ test("конкурентна заявка з тією самою папкою �
       return "folder-1";
     },
     async deleteFolder() {},
+    async listFilesInFolder() {
+      return [];
+    },
+    async createFile() {
+      throw new Error("createFile не мав викликатись");
+    },
+    async deleteFile() {},
   };
   let deleted: string | null = null;
   const trackingDrive: DriveClient = {
@@ -165,6 +187,13 @@ test("збій запису в БД видаляє щойно створену �
     async deleteFolder(folderId) {
       deleted = folderId;
     },
+    async listFilesInFolder() {
+      return [];
+    },
+    async createFile() {
+      throw new Error("createFile не мав викликатись");
+    },
+    async deleteFile() {},
   };
   const repo: ApplicationRepo = {
     async insert() {

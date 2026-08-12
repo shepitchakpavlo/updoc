@@ -1,4 +1,4 @@
-import { createSign } from "node:crypto";
+import { createSign, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 // Google Drive через сервісний акаунт (тикет 03): JWT (RS256) → access token →
@@ -7,11 +7,31 @@ import { readFileSync } from "node:fs";
 
 export type FetchLike = (url: string | URL, init?: RequestInit) => Promise<Response>;
 
+/** Файл у Drive з іменем і MD5 вмісту (для ідемпотентного запису, тикет 08). */
+export interface DriveFileInfo {
+  id: string;
+  name: string;
+  /** hex MD5 вмісту (рахують самі сервери Drive); null — для Google-документів, тут не бувають */
+  md5Checksum: string | null;
+}
+
+export interface CreateFileInput {
+  name: string;
+  parentId: string;
+  mimeType: string;
+  data: Buffer;
+}
+
 export interface DriveClient {
   /** id усіх невидалених папок з таким ім'ям у батьківському каталозі */
   findFoldersByName(name: string, parentId: string): Promise<string[]>;
   createFolder(name: string, parentId: string): Promise<string>;
   deleteFolder(folderId: string): Promise<void>;
+  /** усі невидалені файли папки (id, ім'я, MD5 вмісту) */
+  listFilesInFolder(parentId: string): Promise<DriveFileInfo[]>;
+  /** створює файл із вмістом у папці (media upload) */
+  createFile(input: CreateFileInput): Promise<string>;
+  deleteFile(fileId: string): Promise<void>;
 }
 
 export interface DriveClientOptions {
@@ -28,6 +48,8 @@ interface ServiceAccountKey {
 }
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
+// Media upload — окремий host Google Drive API (тикет 08).
+const DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 const DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token";
@@ -116,15 +138,22 @@ export function createDriveClient(opts: DriveClientOptions): DriveClient {
     return accessToken;
   }
 
-  async function driveFetch(method: string, path: string, body?: unknown): Promise<Response> {
+  async function driveFetch(
+    method: string,
+    path: string,
+    body?: unknown,
+    media?: { base: string; contentType: string; body: Buffer },
+  ): Promise<Response> {
     const token = await getAccessToken();
-    const res = await fetchImpl(`${DRIVE_API}${path}`, {
+    const res = await fetchImpl(`${media?.base ?? DRIVE_API}${path}`, {
       method,
       headers: {
         authorization: `Bearer ${token}`,
-        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(body !== undefined || media !== undefined
+          ? { "content-type": media?.contentType ?? "application/json" }
+          : {}),
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: media !== undefined ? media.body : body !== undefined ? JSON.stringify(body) : undefined,
     });
     // Повідомлення без тіла відповіді й без шляху запиту (у q може бути ім'я папки =
     // ПІБ — Компанія): у логах не має бути PII (Architecture §5).
@@ -155,6 +184,43 @@ export function createDriveClient(opts: DriveClientOptions): DriveClient {
     },
     async deleteFolder(folderId) {
       await driveFetch("DELETE", `/files/${folderId}`);
+    },
+    async listFilesInFolder(parentId) {
+      const q = `'${escapeQuery(parentId)}' in parents and trashed=false`;
+      const res = await driveFetch(
+        "GET",
+        `/files?q=${encodeURIComponent(q)}&fields=files(id,name,md5Checksum)&pageSize=100`,
+      );
+      const data = (await res.json()) as {
+        files?: Array<{ id: string; name: string; md5Checksum?: string | null }>;
+      };
+      return data.files?.map((file) => ({ id: file.id, name: file.name, md5Checksum: file.md5Checksum ?? null })) ?? [];
+    },
+    async createFile({ name, parentId, mimeType, data }) {
+      // Media upload: metadata JSON + сирі байти файла в одному multipart/related
+      // тілі. Ім'я файла — слот + розширення (PII-безпека, тикет 08).
+      const boundary = `updoc-${randomBytes(16).toString("hex")}`;
+      const metadata = Buffer.from(JSON.stringify({ name, mimeType, parents: [parentId] }));
+      const body = Buffer.concat([
+        Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n`),
+        metadata,
+        Buffer.from(`\r\n--${boundary}\r\ncontent-type: ${mimeType}\r\n\r\n`),
+        data,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+      const res = await driveFetch("POST", "/files?uploadType=multipart&fields=id", undefined, {
+        base: DRIVE_UPLOAD_API,
+        contentType: `multipart/related; boundary=${boundary}`,
+        body,
+      });
+      const created = (await res.json()) as { id?: string };
+      if (!created.id) {
+        throw new Error("Google Drive: створення файла не повернуло id");
+      }
+      return created.id;
+    },
+    async deleteFile(fileId) {
+      await driveFetch("DELETE", `/files/${fileId}`);
     },
   };
 }
