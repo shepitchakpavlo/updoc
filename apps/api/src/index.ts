@@ -1,3 +1,5 @@
+// .env (секрети сервісного акаунта та перевизначення дефолтів) — поза репо, див. .env.example.
+import "dotenv/config";
 import { buildApp } from "./app.js";
 
 const app = buildApp({ logger: true });
