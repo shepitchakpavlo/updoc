@@ -12,6 +12,12 @@
 - **Свідомо поза TB-0:** реальний hosted vision-виклик (провайдер перевірено поза системою; інтеграція — Phase 1), R2/MinIO, деплой на Render, OAuth, панель оператора, Uppy, IBAN, expiry, retention.
 - **Стек:** TypeScript monorepo — `apps/api` (Fastify + Drizzle), `apps/web` (React + Vite), Postgres у `docker-compose` (dev — MinIO як S3-емулятор), `Makefile` (`make dev` — одна команда).
 
+## Розробка
+
+- Bootstrap: `npm install` у корені репо, далі `make dev` — одна команда: docker compose (Postgres + MinIO) → міграції drizzle-kit → dev-сервери API (`:3000`, health — `GET /healthz`) і web (`:5173`).
+- Команди: `make typecheck`, `make test`, `make build`, `make db-generate`, `make db-migrate`, `make down`. Міграції БД — лише через `db-generate`/`db-migrate` (drizzle-kit).
+- Дефолти працюють без `.env`: `DATABASE_URL=postgres://updoc:updoc@localhost:5432/updoc` (docker-compose.yml, drizzle.config.ts); перевизначення — `.env` (див. `.env.example`).
+
 ## Правила
 
 - **Агент-зручність:** усе в репо; після bootstrap жодних кроків поза git. Міграції БД — через `drizzle-kit`.
