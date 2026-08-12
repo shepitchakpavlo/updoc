@@ -8,6 +8,13 @@
       "when": 1786529914890,
       "tag": "0000_left_saracen",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786530298845,
+      "tag": "0001_sparkling_jackal",
+      "breakpoints": true
     }
   ]
 }
