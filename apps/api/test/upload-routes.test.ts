@@ -72,6 +72,9 @@ function fakeSubmissions(): FakeSubmissions {
         pageCount: null,
       };
     },
+    async listByToken() {
+      return null;
+    },
   };
 }
 
@@ -79,6 +82,9 @@ function throwingSubmissions(error: Error): SubmissionService {
   return {
     async uploadSlot() {
       throw error;
+    },
+    async listByToken() {
+      return null;
     },
   };
 }

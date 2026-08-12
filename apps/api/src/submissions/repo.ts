@@ -1,8 +1,17 @@
+import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { AssessmentResult, SubmissionStatus } from "../db/schema.js";
 import { submissions } from "../db/schema.js";
 
 export type NewSubmission = typeof submissions.$inferInsert;
 export type Submission = typeof submissions.$inferSelect;
+
+// Рядок для SPA-форми (тикет 05): стан слота і assessment для фідбека.
+export interface SubmissionListItem {
+  slot: string;
+  status: SubmissionStatus;
+  assessment: AssessmentResult | null;
+}
 
 export interface SubmissionRepo {
   /**
@@ -11,6 +20,8 @@ export interface SubmissionRepo {
    * assessment і drive_file_id — вони належать старому файлу.
    */
   upsert(row: NewSubmission): Promise<void>;
+  /** Усі submissions заявки (стан і фідбек для форми). */
+  listByApplicationId(applicationId: string): Promise<SubmissionListItem[]>;
 }
 
 export function createPgSubmissionRepo(db: NodePgDatabase): SubmissionRepo {
@@ -28,6 +39,16 @@ export function createPgSubmissionRepo(db: NodePgDatabase): SubmissionRepo {
             driveFileId: row.driveFileId ?? null,
           },
         });
+    },
+    async listByApplicationId(applicationId) {
+      return db
+        .select({
+          slot: submissions.slot,
+          status: submissions.status,
+          assessment: submissions.assessment,
+        })
+        .from(submissions)
+        .where(eq(submissions.applicationId, applicationId));
     },
   };
 }

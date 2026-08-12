@@ -5,7 +5,7 @@ import {
   FileTooLargeError,
   UnsupportedFormatError,
 } from "../src/preflight/index.js";
-import type { NewSubmission, SubmissionRepo } from "../src/submissions/repo.js";
+import type { NewSubmission, SubmissionListItem, SubmissionRepo } from "../src/submissions/repo.js";
 import {
   InvalidSlotError,
   UnknownTokenError,
@@ -38,25 +38,39 @@ function makeAppRow(): Application {
   };
 }
 
+// Рядки для listByApplicationId: з applicationId, щоб фейк міг фільтрувати
+// за заявкою; назовні (інтерфейс repo) applicationId не входить.
+interface FakeSubmissionRow extends SubmissionListItem {
+  applicationId: string;
+}
+
 interface FakeSubmissionRepo extends SubmissionRepo {
   upserts: NewSubmission[];
+  rows: FakeSubmissionRow[];
 }
 
 function fakeSubmissionRepo(): FakeSubmissionRepo {
   const upserts: NewSubmission[] = [];
+  const rows: FakeSubmissionRow[] = [];
   return {
     upserts,
+    rows,
     async upsert(row) {
       upserts.push(row);
+    },
+    async listByApplicationId(applicationId) {
+      return rows
+        .filter((row) => row.applicationId === applicationId)
+        .map(({ applicationId: _applicationId, ...rest }) => rest);
     },
   };
 }
 
 function makeService(overrides: {
   applications?: ApplicationRepo;
-  submissions?: SubmissionRepo;
+  submissions?: FakeSubmissionRepo;
 } = {}): SubmissionService & { submissions: FakeSubmissionRepo } {
-  const submissions = (overrides.submissions ?? fakeSubmissionRepo()) as FakeSubmissionRepo;
+  const submissions = overrides.submissions ?? fakeSubmissionRepo();
   const applications: ApplicationRepo =
     overrides.applications ?? {
       async insert() {},
@@ -154,4 +168,57 @@ test("повторне завантаження на слот замінює п�
   assert.match(storedFirst.checksum, /^[0-9a-f]{64}$/);
   assert.notEqual(storedFirst.checksum, storedSecond.checksum);
   assert.equal(storedSecond.status, "pending", "після заміни файл знову очікує assessment");
+});
+
+// Контракт тикета 05 для SPA: стан і фідбек слотів за токеном, у порядку
+// чекліста; невідомий токен — null (route віддає 404).
+
+test("listByToken: невідомий токен — null", async () => {
+  const service = makeService({
+    applications: {
+      async insert() {},
+      async findByTokenHash() {
+        return null;
+      },
+    },
+  });
+  assert.equal(await service.listByToken("unknown"), null);
+});
+
+test("listByToken: стан слотів у порядку чекліста; фідбек — лише для needs_reupload", async () => {
+  const submissions = fakeSubmissionRepo();
+  submissions.rows.push(
+    // Поза порядком чекліста і для іншої заявки — має бути відфільтровано/впорядковано.
+    { applicationId: APP_ID, slot: "15-16", status: "accepted", assessment: null },
+    {
+      applicationId: APP_ID,
+      slot: "1-2",
+      status: "needs_reupload",
+      assessment: {
+        accepted: false,
+        reason: "Номер документа не впізнано",
+        recognizedFields: {},
+        confidence: 0.4,
+      },
+    },
+    {
+      applicationId: APP_ID,
+      slot: "11-12",
+      status: "accepted",
+      assessment: { accepted: true, reason: "причина, яку не треба показувати", recognizedFields: {}, confidence: 0.9 },
+    },
+    { applicationId: "other-app", slot: "13-14", status: "accepted", assessment: null },
+  );
+  const service = makeService({ submissions });
+  const views = await service.listByToken("raw-token");
+  assert.deepEqual(views, [
+    { slot: "1-2", status: "needs_reupload", feedback: "Номер документа не впізнано" },
+    { slot: "11-12", status: "accepted", feedback: null },
+    { slot: "15-16", status: "accepted", feedback: null },
+  ]);
+});
+
+test("listByToken: без submissions — порожній список, не null", async () => {
+  const service = makeService();
+  assert.deepEqual(await service.listByToken("raw-token"), []);
 });

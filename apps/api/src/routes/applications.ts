@@ -3,10 +3,11 @@ import { FolderExistsError, type ApplicationService } from "../applications/serv
 import { ApiError } from "../errors.js";
 import type { SubmissionService } from "../submissions/service.js";
 
-// Публічні ендпоінти тикета 03 і 04:
+// Публічні ендпоінти тикета 03, 04 і 05:
 // POST /applications — оператор створює заявку (компанія + ПІБ) → лінк із токеном;
 // GET /applications/access — форма за токеном (заголовок x-access-token, не URL —
 //   щоб токен не потрапляв у логи запитів); невідомий/невалідний токен → 404;
+// GET /applications/submissions — стан і фідбек слотів для форми (тикет 05);
 // POST /applications/upload — multipart (слот + файл) за токеном; preflight і
 //   створення submission — у сервісі; тіло відповіді без імені файла (PII-безпека).
 
@@ -59,6 +60,21 @@ export function applicationRoutes(
         return reply.code(404).send(notFound);
       }
       return view;
+    });
+
+    // Стан і фідбек слотів для SPA-форми (тикет 05): порожній список —
+    // коли жоден файл ще не завантажено; feedback — причина, коли файл
+    // треба перезавантажити (причини policy з'являться в assessment, тикети 06/07).
+    app.get("/applications/submissions", async (req, reply) => {
+      const token = accessToken(req);
+      if (token === null) {
+        return reply.code(404).send(notFound);
+      }
+      const views = await submissions.listByToken(token);
+      if (views === null) {
+        return reply.code(404).send(notFound);
+      }
+      return { submissions: views };
     });
 
     app.post("/applications/upload", async (req, reply) => {

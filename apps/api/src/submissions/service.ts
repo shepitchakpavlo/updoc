@@ -5,7 +5,7 @@ import type { SubmissionStatus } from "../db/schema.js";
 import { ApiError } from "../errors.js";
 import { preflight, type SupportedMime } from "../preflight/index.js";
 import { hashToken } from "../tokens.js";
-import type { SubmissionRepo } from "./repo.js";
+import type { SubmissionListItem, SubmissionRepo } from "./repo.js";
 
 // Upload файла на слот за токеном заявки (тикет 04): токен → заявка,
 // слот із чекліста, preflight (розмір/MIME/сторінки PDF), sha256, submission
@@ -39,8 +39,19 @@ export interface UploadResult {
   pageCount: number | null;
 }
 
+// Стан слота для SPA-форми (тикет 05): feedback — зрозуміла причина для
+// працівника, коли файл треба перезавантажити (Architecture §2: кожен reject
+// має feedback; причини policy з'являться в assessment тикетами 06/07).
+export interface SubmissionView {
+  slot: BookletSlot;
+  status: SubmissionStatus;
+  feedback: string | null;
+}
+
 export interface SubmissionService {
   uploadSlot(input: UploadSlotInput): Promise<UploadResult>;
+  /** Стан і фідбек усіх слотів заявки в порядку чекліста; null — невідомий токен. */
+  listByToken(token: string): Promise<SubmissionView[] | null>;
 }
 
 export interface SubmissionServiceDeps {
@@ -72,6 +83,31 @@ export function createSubmissionService(deps: SubmissionServiceDeps): Submission
         driveFileId: null,
       });
       return { slot: slot as BookletSlot, checksum, status, ...result };
+    },
+    async listByToken(token) {
+      const application = await deps.applications.findByTokenHash(hashToken(token));
+      if (!application) {
+        return null;
+      }
+      const rows = await deps.submissions.listByApplicationId(application.id);
+      const bySlot: Record<string, SubmissionListItem> = Object.fromEntries(
+        rows.map((row) => [row.slot, row]),
+      );
+      const views: SubmissionView[] = [];
+      for (const slot of BOOKLET_SLOTS) {
+        const row = bySlot[slot];
+        if (!row) {
+          continue;
+        }
+        views.push({
+          slot,
+          status: row.status,
+          // Причину показуємо лише тоді, коли файл відхилено: прийнятий/той, що
+          // перевіряється, не потребує дії працівника.
+          feedback: row.status === "needs_reupload" ? (row.assessment?.reason ?? null) : null,
+        });
+      }
+      return views;
     },
   };
 }

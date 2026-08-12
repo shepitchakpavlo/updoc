@@ -18,6 +18,9 @@ function stubSubmissions(): SubmissionService {
     async uploadSlot() {
       throw new Error("uploadSlot не очікувався в тестах тикета 03");
     },
+    async listByToken() {
+      throw new Error("listByToken не очікувався в тестах тикета 03");
+    },
   };
 }
 
