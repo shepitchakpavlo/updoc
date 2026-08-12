@@ -18,3 +18,17 @@
 - **PII-безпека:** жодних токенів, файлів і значень персональних даних у логах, комітах і звітах. Тестові файли з реальними документами — поза репо.
 - **Контракти архітектури стабільні:** `AssessmentProvider`, `TemporaryStorage`, `FinalDestination` — межі не змінюються без оновлення `Tech/Architecture — UpDoc MVP.md`.
 - Зміни в нотатках проєкту (Obsidian) — лише після узгодження з користувачем.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
