@@ -4,7 +4,7 @@
 
 - **Продукт:** збір і перевірка HR-документів нових працівників: заявка → мобільна форма за унікальним посиланням → AI-assessment → пофайловий запис у Google Drive Shared Drive.
 - **Нотатки проєкту (Obsidian):** `~/Documents/Pavlo-obs/Projects/UpDoc/` — коренева: `UpDoc product.md`; плани: `Phases/Implementation Roadmap — UpDoc.md`, `Phases/TB-0 — Tracer Bullet.md`. Перед роботою над кодом — звірятися з TB-0.
-- **Репозиторій:** https://github.com/shepitchakpavlo/updoc (private). Локальний клон: ця директорія.
+- **Репозиторій:** https://github.com/shepitchakpavlo/updoc (public). Локальний клон: ця директорія.
 
 ## Стан (2026-08-12)
 

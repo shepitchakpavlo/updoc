@@ -2,7 +2,15 @@
 import "dotenv/config";
 import { buildApp } from "./app.js";
 
-const app = buildApp({ logger: true });
+// PII-gate: токен доступу подорожує в URL-шляху роутів (/a/:token),
+// тому logger обов'язково ред.актить req.url/req.headers/res — сирий
+// токен ніколи не потрапляє в логи (перевірено test/log-redaction.test.ts).
+const app = buildApp({
+  logger: {
+    level: "info",
+    redact: { paths: ["req.url", "req.headers", "res"], censor: "[REDACTED]" },
+  },
+});
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
 
