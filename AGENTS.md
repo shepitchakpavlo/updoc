@@ -19,6 +19,16 @@
 - **Контракти архітектури стабільні:** `AssessmentProvider`, `TemporaryStorage`, `FinalDestination` — межі не змінюються без оновлення `Tech/Architecture — UpDoc MVP.md`.
 - Зміни в нотатках проєкту (Obsidian) — лише після узгодження з користувачем.
 
+## Pre-commit gates (обов'язкові для кожного запуску агента)
+
+Перед комітом кодової зміни ВИКОНАЙ реальними командами (глобальний шаблон — у `~/.config/opencode/rules/pre-commit-gates.md`; тут — конкретика цього проєкту):
+
+1. **PII/логи:** сирий access token не може бути в логах. Роути мають токен у URL — Fastify logger має redact (`["req.url","req.headers","res"]`) або бути вимкненим. Перевірка: `grep -n "logger" apps/api/src/app.ts`
+2. **Web-тести:** `apps/web` має хоча б один тестовий файл; root `test` скрипт запускає тести обох воркспейсів (`--workspaces`)
+3. **Build:** root `build` скрипт існує і `npm run build` проходить
+4. **Typecheck + тести:** `npm run typecheck` і `npm test` — обидва зелені
+5. **Звіт:** при завершенні тікета напиши `.ab-gates.md` — що перевірив/виправив per gate
+
 ## Agent skills
 
 ### Issue tracker
