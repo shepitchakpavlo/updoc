@@ -20,6 +20,12 @@ export function buildApp(opts: FastifyServerOptions = {}, deps: AppDeps = create
     }
     return reply.send(err);
   });
+  // PII-gate: дефолтний 404-хендлер Fastify логує `Route GET:/a/<token> not
+  // found` — сирий токен у msg, ред.акція полів його не покриває. Свій хендлер:
+  // без URL у логах взагалі (перевірено test/log-redaction.test.ts).
+  app.setNotFoundHandler((_req, reply) => {
+    return reply.code(404).send({ error: "not_found" });
+  });
   app.register(healthRoutes);
   app.register(applicationRoutes(deps.applications, deps.submissions));
   return app;
